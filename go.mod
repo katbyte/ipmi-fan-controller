@@ -4,8 +4,8 @@ go 1.27.0
 
 require (
 	github.com/bougou/go-ipmi v0.9.1
-	github.com/gookit/color v1.6.1
-	github.com/katbyte/go-kt v0.9.0
+	github.com/gookit/color v1.6.3
+	github.com/katbyte/go-kt v0.9.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	go.yaml.in/yaml/v3 v3.0.5
