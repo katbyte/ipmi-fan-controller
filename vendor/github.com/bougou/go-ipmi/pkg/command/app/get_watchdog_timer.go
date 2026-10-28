@@ -1,0 +1,156 @@
+package app
+
+import (
+	"fmt"
+
+	"github.com/bougou/go-ipmi/pkg/types"
+)
+
+// 27.7 Get Watchdog Timer Command
+type GetWatchdogTimerRequest struct {
+	// empty
+}
+
+func (req *GetWatchdogTimerRequest) Pack() []byte {
+	return []byte{}
+}
+
+func (req *GetWatchdogTimerRequest) Command() types.Command {
+	return types.CommandGetWatchdogTimer
+}
+
+// WatchdogCountdownUnitsPerSecond is the number of countdown units per second
+// used by the Set/Get Watchdog Timer commands, which express countdown values
+// in 100ms units (IPMI v2.0, 27.6 and 27.7). Note that the pre-timeout
+// interval is expressed in seconds, not in these units.
+const WatchdogCountdownUnitsPerSecond = 10
+
+type GetWatchdogTimerResponse struct {
+	DontLog        bool
+	TimerIsStarted bool
+	TimerUse       TimerUse
+
+	PreTimeoutInterrupt PreTimeoutInterrupt
+	TimeoutAction       TimeoutAction
+	// PreTimeoutIntervalSec is the pre-timeout interval in seconds.
+	PreTimeoutIntervalSec uint8
+
+	ExpirationFlags uint8
+	// InitialCountdown is the initial countdown value in 100ms units.
+	// See InitialCountdownSec for the value in seconds.
+	InitialCountdown uint16
+	// PresentCountdown is the present countdown value in 100ms units.
+	// See PresentCountdownSec for the value in seconds.
+	PresentCountdown uint16
+}
+
+// InitialCountdownSec returns the initial countdown value in seconds.
+func (res *GetWatchdogTimerResponse) InitialCountdownSec() float64 {
+	return float64(res.InitialCountdown) / WatchdogCountdownUnitsPerSecond
+}
+
+// PresentCountdownSec returns the present countdown value in seconds.
+func (res *GetWatchdogTimerResponse) PresentCountdownSec() float64 {
+	return float64(res.PresentCountdown) / WatchdogCountdownUnitsPerSecond
+}
+
+func (res *GetWatchdogTimerResponse) Unpack(msg []byte) error {
+	if len(msg) < 8 {
+		return types.ErrUnpackedDataTooShortWith(len(msg), 8)
+	}
+
+	res.DontLog = types.IsBit7Set(msg[0])
+	res.TimerIsStarted = types.IsBit6Set(msg[0])
+	res.TimerUse = TimerUse(0x07 & msg[0])
+
+	res.PreTimeoutInterrupt = PreTimeoutInterrupt((0x70 & msg[1]) >> 4)
+	res.TimeoutAction = TimeoutAction(0x07 & msg[1])
+
+	res.PreTimeoutIntervalSec = msg[2]
+	res.ExpirationFlags = msg[3]
+	res.InitialCountdown, _, _ = types.UnpackUint16L(msg, 4)
+	res.PresentCountdown, _, _ = types.UnpackUint16L(msg, 6)
+	return nil
+}
+
+func (res *GetWatchdogTimerResponse) Format() string {
+	return "" +
+		fmt.Sprintf("Watchdog Timer Use     : %s (%#02x)\n", res.TimerUse, uint8(res.TimerUse)) +
+		fmt.Sprintf("Watchdog Timer Is      : %s\n", types.FormatBool(res.TimerIsStarted, "Started", "Stopped")) +
+		fmt.Sprintf("Watchdog Timer Actions : %s (%#02x)\n", res.TimeoutAction, uint8(res.TimeoutAction)) +
+		fmt.Sprintf("Pre-timeout interval   : %d seconds\n", res.PreTimeoutIntervalSec) +
+		fmt.Sprintf("Timer Expiration Flags : %#02x\n", res.ExpirationFlags) +
+		fmt.Sprintf("Initial Countdown      : %.1f sec\n", res.InitialCountdownSec()) +
+		fmt.Sprintf("Present Countdown      : %.1f sec\n", res.PresentCountdownSec())
+}
+
+type TimerUse uint8
+
+const (
+	TimerUseBIOSFRB2 TimerUse = 0x01 // BIOS/FRB2
+	TimerUseBIOSPOST TimerUse = 0x02 // BIOS/POST
+	TimerUseOSLoad   TimerUse = 0x03
+	TimerUseSMSOS    TimerUse = 0x04 // SMS/OS
+	TimerUseOEM      TimerUse = 0x05
+)
+
+func (t TimerUse) String() string {
+	m := map[TimerUse]string{
+		0x01: "BIOS FRB2",
+		0x02: "BIOS/POST",
+		0x03: "OS Load",
+		0x04: "SMS/OS",
+		0x05: "OEM",
+	}
+	s, ok := m[t]
+	if ok {
+		return s
+	}
+	return ""
+}
+
+type PreTimeoutInterrupt uint8
+
+const (
+	PreTimeoutInterruptNone      PreTimeoutInterrupt = 0x00
+	PreTimeoutInterruptSMI       PreTimeoutInterrupt = 0x01
+	PreTimeoutInterruptNMI       PreTimeoutInterrupt = 0x02
+	PreTimeoutInterruptMessaging PreTimeoutInterrupt = 0x03
+)
+
+func (t PreTimeoutInterrupt) String() string {
+	m := map[PreTimeoutInterrupt]string{
+		0x00: "None",
+		0x01: "SMI",
+		0x02: "NMI / Diagnostic Interrupt",
+		0x03: "Messaging Interrupt",
+	}
+	s, ok := m[t]
+	if ok {
+		return s
+	}
+	return ""
+}
+
+type TimeoutAction uint8
+
+const (
+	TimeoutActionNoAction   TimeoutAction = 0x00
+	TimeoutActionHardReset  TimeoutAction = 0x01
+	TimeoutActionPowerDown  TimeoutAction = 0x02
+	TimeoutActionPowerCycle TimeoutAction = 0x03
+)
+
+func (t TimeoutAction) String() string {
+	m := map[TimeoutAction]string{
+		0x00: "No action",
+		0x01: "Hard Reset",
+		0x02: "Power Down",
+		0x03: "Power Cycle",
+	}
+	s, ok := m[t]
+	if ok {
+		return s
+	}
+	return ""
+}

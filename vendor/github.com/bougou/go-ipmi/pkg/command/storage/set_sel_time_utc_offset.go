@@ -1,0 +1,36 @@
+package storage
+
+import (
+	"github.com/bougou/go-ipmi/pkg/types"
+)
+
+// 31.11a Set SEL Time UTC Offset. Sets the UTC offset (timezone) associated with SEL Time.
+type SetSELTimeUTCOffsetRequest struct {
+	// signed integer for the offset in minutes from UTC to SEL Time. (ranges from -1440 to 1440)
+	MinutesOffset int16
+}
+
+type SetSELTimeUTCOffsetResponse struct {
+	// empty
+}
+
+func (req *SetSELTimeUTCOffsetRequest) Pack() []byte {
+	out := make([]byte, 2)
+
+	a := types.TwoSComplementEncode(int32(req.MinutesOffset), 16)
+	types.PackUint16L(uint16(a), out, 0)
+
+	return out
+}
+
+func (req *SetSELTimeUTCOffsetRequest) Command() types.Command {
+	return types.CommandSetSELTimeUTCOffset
+}
+
+func (res *SetSELTimeUTCOffsetResponse) Unpack(msg []byte) error {
+	return nil
+}
+
+func (res *SetSELTimeUTCOffsetResponse) Format() string {
+	return ""
+}

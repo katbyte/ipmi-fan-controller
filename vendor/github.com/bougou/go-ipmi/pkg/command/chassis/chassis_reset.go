@@ -1,0 +1,32 @@
+package chassis
+
+import (
+	"github.com/bougou/go-ipmi/pkg/types"
+)
+
+// 28.4 Chassis Reset Command. This command was used with early versions of the
+// ICMB. It has been superseded by the Chassis Control command. For host systems,
+// this corresponds to a system hard reset.
+type ChassisResetRequest struct {
+	// empty
+}
+
+type ChassisResetResponse struct {
+	// empty
+}
+
+func (req *ChassisResetRequest) Pack() []byte {
+	return []byte{}
+}
+
+func (req *ChassisResetRequest) Command() types.Command {
+	return types.CommandChassisReset
+}
+
+func (res *ChassisResetResponse) Unpack(msg []byte) error {
+	return nil
+}
+
+func (res *ChassisResetResponse) Format() string {
+	return ""
+}

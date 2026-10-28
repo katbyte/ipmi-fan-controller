@@ -1,0 +1,11 @@
+.git
+.github
+.idea
+.tools/bin
+.tools/venv
+.tools/npm
+.coverage
+dist
+ipmi-fan-controller
+*.md
+docker-compose.yml

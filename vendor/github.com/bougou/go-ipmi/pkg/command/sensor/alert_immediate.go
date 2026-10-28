@@ -1,0 +1,65 @@
+package sensor
+
+import (
+	"github.com/bougou/go-ipmi/pkg/types"
+)
+
+type AlertImmediateOperation uint8
+
+const (
+	AlertImmediateOperationInitiateAlert AlertImmediateOperation = 0b00
+	AlertImmediateOperationGetStatus     AlertImmediateOperation = 0b01
+	AlertImmediateOperationClearStatus   AlertImmediateOperation = 0b10
+	AlertImmediateOperationReserved      AlertImmediateOperation = 0b11
+)
+
+type AlertImmediateStatus uint8
+
+const (
+	AlertImmediateStatusNoStatus      AlertImmediateStatus = 0x00
+	AlertImmediateStatusNormalEnd     AlertImmediateStatus = 0x01
+	AlertImmediateStatusFailedRetry   AlertImmediateStatus = 0x02
+	AlertImmediateStatusFailedWaitACK AlertImmediateStatus = 0x03
+	AlertImmediateStatusInProgress    AlertImmediateStatus = 0xff
+)
+
+// 30.7 Alert Immediate Command
+type AlertImmediateRequest struct {
+	ChannelNumber uint8
+
+	DestinationSelector uint8
+	Operation           uint8
+
+	SendAlertString     bool
+	AlertStringSelector uint8
+
+	GeneratorID  uint8
+	EvMRev       uint8
+	SensorType   types.SensorType
+	SensorNumber types.SensorNumber
+
+	EventDir         types.EventDir
+	EventReadingType types.EventReadingType
+	EventData        types.EventData
+}
+
+type AlertImmediateResponse struct {
+	AlertImmediateStatus uint8
+}
+
+func (req *AlertImmediateRequest) Pack() []byte {
+	out := make([]byte, 1)
+	return out
+}
+
+func (req *AlertImmediateRequest) Command() types.Command {
+	return types.CommandAlertImmediate
+}
+
+func (res *AlertImmediateResponse) Unpack(msg []byte) error {
+	return nil
+}
+
+func (res *AlertImmediateResponse) Format() string {
+	return ""
+}

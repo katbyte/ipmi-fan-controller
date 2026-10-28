@@ -1,0 +1,310 @@
+// Package bmc holds the runtime state of a Baseboard Management Controller.
+//
+// Nothing in this package does I/O; it is pure in-memory state backed by the
+// abstractions in pkg/hal.  The server layer (pkg/server) wires transport,
+// clock, and HAL together with this state to produce a working BMC.
+package bmc
+
+import (
+	"fmt"
+	"sync"
+
+	"github.com/bougou/go-ipmi/pkg/clock"
+	"github.com/bougou/go-ipmi/pkg/hal"
+	"github.com/bougou/go-ipmi/pkg/types"
+)
+
+// DeviceInfo contains the identification data returned by Get Device ID.
+type DeviceInfo struct {
+	DeviceID       uint8
+	DeviceRevision uint8
+	FirmwareMajor  uint8 // major revision (bits 6:0)
+	FirmwareMinor  uint8 // minor revision, BCD
+	IPMIVersion    uint8 // 0x20 for IPMI 2.0
+	ManufacturerID uint32
+	ProductID      uint16
+	AuxFirmwareRev [4]byte
+	// AdditionalDeviceSupport bitfield per Table 20-2.
+	AdditionalDeviceSupport uint8
+}
+
+// BMC is the central state object for an IPMI server.
+//
+// Callers create a BMC via [New] and pass it to the server together with a
+// transport and HAL.  The BMC does not own any goroutines; lifecycle management
+// belongs to the server.
+type BMC struct {
+	Info DeviceInfo
+	GUID [16]byte
+
+	// cfgMu guards the runtime-reconfigurable config fields kg, cipherSuites,
+	// v15AuthTypes, and v15Disabled. Readers on the packet hot path take the
+	// read lock and copy out; the options and setters take the write lock. The
+	// fields are unexported so every access provably goes through it.
+	cfgMu sync.RWMutex
+
+	// kg is the BMC key (Kg); nil means "one-key" mode using Kuid only.
+	// Set via [WithKG], read via [BMC.ResolvedKG] and [BMC.HasKG].
+	kg []byte
+
+	// cipherSuites is the set of RMCP+ cipher suites the server advertises and
+	// accepts during the Open Session handshake. Defaults to
+	// [DefaultCipherSuites] when nil. Each suite must be supported by the
+	// reference server (see [SupportedCipherSuite]); this is validated in
+	// [WithCipherSuites] and [BMC.SetCipherSuites]. Read it via
+	// [BMC.ResolvedCipherSuites].
+	cipherSuites []types.CipherSuiteID
+
+	// v15AuthTypes lists the v1.5 authentication types this BMC advertises and
+	// accepts. Set via [WithV15AuthTypes], read via [BMC.ResolvedV15AuthTypes].
+	v15AuthTypes []V15AuthType
+	// v15Disabled disables IPMI v1.5 LAN sessions when true.
+	v15Disabled bool
+
+	Users    *UserStore
+	Channels *ChannelStore
+	Sessions *SessionStore
+
+	// V15Sessions tracks IPMI v1.5 LAN sessions (separate from RMCP+ sessions).
+	V15Sessions *V15SessionStore
+
+	// SDRRepo tracks SDR repository reservation state (v2.0§33.11).
+	SDRRepo *SDRRepoStore
+	// SOL holds the SOL payload configuration (v2.0 Table 26-5) and the
+	// active SOL instance state machine (v2.0 §15).
+	SOL *SOLStore
+	// sdrRepo is the lazily-initialised SDR record repository (v2.0§33).
+	sdrRepo     *SDRRepository
+	sdrRepoOnce sync.Once
+	// fruInv is the lazily-initialised FRU inventory (v2.0§34).
+	fruInv     *FRUInventory
+	fruInvOnce sync.Once
+
+	hal   hal.HAL
+	clock clock.Clock
+}
+
+// Option configures a [BMC].
+type Option func(*BMC)
+
+// WithKG sets the BMC-level key (Kg) used for two-key RAKP authentication.
+// Leave unset (or pass nil) to use one-key mode (Kuid only).
+func WithKG(kg []byte) Option {
+	return func(b *BMC) {
+		if len(kg) > 0 {
+			b.cfgMu.Lock()
+			b.kg = append([]byte(nil), kg...)
+			b.cfgMu.Unlock()
+		}
+	}
+}
+
+// ResolvedKG returns a copy of the BMC key (Kg), or nil in one-key mode.
+func (b *BMC) ResolvedKG() []byte {
+	b.cfgMu.RLock()
+	defer b.cfgMu.RUnlock()
+	if len(b.kg) == 0 {
+		return nil
+	}
+	return append([]byte(nil), b.kg...)
+}
+
+// HasKG reports whether a BMC key (Kg) is configured, without copying it.
+func (b *BMC) HasKG() bool {
+	b.cfgMu.RLock()
+	defer b.cfgMu.RUnlock()
+	return len(b.kg) > 0
+}
+
+// WithClock injects a custom [clock.Clock].  Defaults to [clock.Real].
+func WithClock(c clock.Clock) Option {
+	return func(b *BMC) { b.clock = c }
+}
+
+// WithV15AuthTypes sets the IPMI v1.5 authentication types the BMC advertises
+// and accepts. Pass nil/empty to restore [DefaultV15AuthTypes].
+func WithV15AuthTypes(types []V15AuthType) Option {
+	return func(b *BMC) {
+		b.cfgMu.Lock()
+		defer b.cfgMu.Unlock()
+		if len(types) == 0 {
+			b.v15AuthTypes = nil
+			return
+		}
+		b.v15AuthTypes = append(b.v15AuthTypes[:0:0], types...)
+		b.v15Disabled = false
+	}
+}
+
+// WithV15Disabled turns off IPMI v1.5 LAN session support. RMCP+ (v2.0) is unaffected.
+func WithV15Disabled() Option {
+	return func(b *BMC) {
+		b.cfgMu.Lock()
+		b.v15Disabled = true
+		b.cfgMu.Unlock()
+	}
+}
+
+// V15LANEnabled reports whether the BMC advertises and accepts IPMI v1.5 sessions.
+func (b *BMC) V15LANEnabled() bool {
+	if b == nil {
+		return false
+	}
+	b.cfgMu.RLock()
+	defer b.cfgMu.RUnlock()
+	return !b.v15Disabled && len(b.resolvedV15AuthTypesLocked()) > 0
+}
+
+// resolvedV15AuthTypesLocked returns the internal v1.5 auth type list (not a
+// copy) and must be called with cfgMu held.
+func (b *BMC) resolvedV15AuthTypesLocked() []V15AuthType {
+	if b.v15Disabled {
+		return nil
+	}
+	if len(b.v15AuthTypes) > 0 {
+		return b.v15AuthTypes
+	}
+	return DefaultV15AuthTypes
+}
+
+// ResolvedV15AuthTypes returns a copy of the v1.5 auth type list, defaulting to MD5.
+func (b *BMC) ResolvedV15AuthTypes() []V15AuthType {
+	b.cfgMu.RLock()
+	defer b.cfgMu.RUnlock()
+	return append([]V15AuthType(nil), b.resolvedV15AuthTypesLocked()...)
+}
+
+// V15AuthTypeEnabled reports whether authType is configured on this BMC.
+func (b *BMC) V15AuthTypeEnabled(authType V15AuthType) bool {
+	if b == nil {
+		return false
+	}
+	b.cfgMu.RLock()
+	defer b.cfgMu.RUnlock()
+	if b.v15Disabled {
+		return false
+	}
+	for _, t := range b.resolvedV15AuthTypesLocked() {
+		if t == authType {
+			return true
+		}
+	}
+	return false
+}
+
+// WithCipherSuites sets the RMCP+ cipher suites the server advertises and
+// accepts. Each ID must be a suite the reference server implements
+// ([SupportedCipherSuite]); otherwise an error is returned by New and the
+// default suite list is kept. Pass nil/empty to restore [DefaultCipherSuites].
+func WithCipherSuites(ids []types.CipherSuiteID) Option {
+	return func(b *BMC) {
+		b.setCipherSuites(ids)
+	}
+}
+
+// ResolvedCipherSuites returns a copy of the cipher suite list to use for
+// advertisement, falling back to [DefaultCipherSuites] when none was configured.
+func (b *BMC) ResolvedCipherSuites() []types.CipherSuiteID {
+	b.cfgMu.RLock()
+	defer b.cfgMu.RUnlock()
+	if len(b.cipherSuites) > 0 {
+		return append([]types.CipherSuiteID(nil), b.cipherSuites...)
+	}
+	return append([]types.CipherSuiteID(nil), DefaultCipherSuites...)
+}
+
+// SetCipherSuites replaces the configured cipher suite list. Each ID must be
+// supported by the reference server ([SupportedCipherSuite]); an unsupported
+// ID panics, failing at configuration time rather than at handshake time.
+func (b *BMC) SetCipherSuites(ids []types.CipherSuiteID) {
+	b.setCipherSuites(ids)
+}
+
+func (b *BMC) setCipherSuites(ids []types.CipherSuiteID) {
+	if len(ids) == 0 {
+		b.cfgMu.Lock()
+		b.cipherSuites = nil
+		b.cfgMu.Unlock()
+		return
+	}
+	// Validate before taking the lock; validateCipherSuites panics on an
+	// unsupported suite, so we never install a partially-validated list.
+	validateCipherSuites(ids)
+	b.cfgMu.Lock()
+	b.cipherSuites = append(b.cipherSuites[:0:0], ids...)
+	b.cfgMu.Unlock()
+}
+
+// New creates a BMC with sane defaults.
+//
+// h is required; it provides hardware access.  opts are applied in order.
+func New(info DeviceInfo, guid [16]byte, h hal.HAL, opts ...Option) *BMC {
+	b := &BMC{
+		Info:  info,
+		GUID:  guid,
+		hal:   h,
+		clock: clock.Real,
+
+		Users:    NewUserStore(),
+		Channels: NewChannelStore(),
+		SDRRepo:  NewSDRRepoStore(),
+	}
+	for _, o := range opts {
+		o(b)
+	}
+	b.Sessions = NewSessionStore(b.clock)
+	b.V15Sessions = NewV15SessionStore(b.clock)
+	b.SOL = NewSOLStore(h, b.clock)
+	// Session termination automatically deactivates its payloads (v2.0§24.2).
+	b.Sessions.SetOnRemove(b.SOL.DeactivateBySession)
+	return b
+}
+
+// validateCipherSuites panics if any configured cipher suite is not implemented
+// by the reference server. Failing at construction avoids runtime handshake
+// failures from advertising suites we cannot negotiate.
+func validateCipherSuites(ids []types.CipherSuiteID) {
+	for _, id := range ids {
+		if !SupportedCipherSuite(id) {
+			panic(fmt.Sprintf("bmc: cipher suite %d is not implemented by the reference server", id))
+		}
+	}
+}
+
+// HAL returns the underlying hardware abstraction.
+func (b *BMC) HAL() hal.HAL { return b.hal }
+
+// Clock returns the time source used by this BMC.
+func (b *BMC) Clock() clock.Clock { return b.clock }
+
+// SDRRepository returns the cached SDR record repository, or nil when
+// the backing HAL provides no SDR storage.
+func (b *BMC) SDRRepository() *SDRRepository {
+	b.sdrRepoOnce.Do(func() {
+		if b.hal == nil {
+			return
+		}
+		store := b.hal.Storage()
+		if store == nil || store.SDR() == nil {
+			return
+		}
+		b.sdrRepo = NewSDRRepository(store.SDR(), b.clock)
+	})
+	return b.sdrRepo
+}
+
+// FRUInventory returns the FRU inventory , or nil when the backing HAL
+// provides no FRU storage.
+func (b *BMC) FRUInventory() *FRUInventory {
+	b.fruInvOnce.Do(func() {
+		if b.hal == nil {
+			return
+		}
+		store := b.hal.Storage()
+		if store == nil || store.FRU() == nil {
+			return
+		}
+		b.fruInv = NewFRUInventory(store.FRU())
+	})
+	return b.fruInv
+}

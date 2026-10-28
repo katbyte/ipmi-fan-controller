@@ -1,0 +1,41 @@
+---
+name: acceptance
+on:
+  push:
+    branches: [ 'main' ]
+  pull_request:
+    types: ['opened', 'synchronize']
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'vendor/**'
+      - 'makefile'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'acceptance/**'
+      - 'lib/web/page/**'
+      - '.github/workflows/pr-acceptance.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: acceptance (the image, as docker runs it)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ./.go-version
+
+      # make owns the image's life, so CI runs exactly what a developer runs: it builds the image
+      # and starts it against a made-up disk shelf's BMC the test serves on the network. A runner
+      # has no BMC, and the suite needs none.
+      - name: Run the live suite
+        run: make testacc

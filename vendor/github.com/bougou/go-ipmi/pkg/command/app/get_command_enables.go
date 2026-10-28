@@ -1,0 +1,62 @@
+package app
+
+import (
+	"github.com/bougou/go-ipmi/pkg/types"
+	// 21.8 Get Command Enables Command
+)
+
+type GetCommandEnablesRequest struct {
+	ChannelNumber uint8
+
+	CommandRangeMask CommandRangeMask
+	NetFn            types.NetFn
+	LUN              uint8
+
+	CodeForNetFn2C uint8
+	OEMIANA        uint32 // 3 bytes only
+}
+
+type GetCommandEnablesResponse struct {
+	// Todo
+	CommandEnableMask []byte
+}
+
+func (req *GetCommandEnablesRequest) Command() types.Command {
+	return types.CommandGetCommandEnables
+}
+
+func (req *GetCommandEnablesRequest) Pack() []byte {
+	out := make([]byte, 6)
+	types.PackUint8(req.ChannelNumber, out, 0)
+
+	netfn := uint8(req.NetFn) & (uint8(req.CommandRangeMask) << 6)
+	types.PackUint8(netfn, out, 1)
+
+	types.PackUint8(req.LUN&0x03, out, 2)
+
+	if uint8(req.NetFn) == 0x2c {
+		types.PackUint8(req.CodeForNetFn2C, out, 3)
+		return out[0:4]
+	}
+
+	if uint8(req.NetFn) == 0x2e {
+		types.PackUint24L(req.OEMIANA, out, 3)
+		return out[0:6]
+	}
+
+	return out[0:3]
+}
+
+func (res *GetCommandEnablesResponse) Unpack(msg []byte) error {
+	if len(msg) < 16 {
+		return types.ErrUnpackedDataTooShortWith(len(msg), 16)
+	}
+
+	res.CommandEnableMask, _, _ = types.UnpackBytes(msg, 0, 16)
+	return nil
+}
+
+func (res *GetCommandEnablesResponse) Format() string {
+	// Todo
+	return ""
+}

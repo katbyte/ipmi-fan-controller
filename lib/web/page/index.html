@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ipmi-fan-controller</title>
+  <script>try { document.documentElement.dataset.theme = localStorage.getItem('ipmi-fan-controller-theme') || 'dark'; } catch { document.documentElement.dataset.theme = 'dark'; }</script>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header>
+    <h1>🌀 ipmi-fan-controller <span id="version"></span></h1>
+    <span id="updated" class="sub"></span>
+    <span id="dry" class="badge g warn" hidden>dry run: nothing is set</span>
+    <div class="right">
+      <label id="tokenbox" class="plain" hidden>token <input id="token" type="password" autocomplete="off"></label>
+      <button id="theme" class="theme" type="button" aria-label="toggle dark mode" title="toggle dark mode"><span class="sun">☀️</span><span class="moon">🌙</span><span class="fan">🌀</span></button>
+    </div>
+  </header>
+
+  <main>
+    <div class="bar">
+      <nav class="seg tabs">
+        <a href="#overview" data-tab="overview">Overview</a>
+        <a href="#corrections" data-tab="corrections">Corrections <span id="corrections-n" class="n"></span></a>
+        <a href="#settings" data-tab="settings">Settings</a>
+      </nav>
+      <div id="span" class="seg span" title="how far back the charts go: the program keeps six hours, from when its web page was turned on">
+        <button data-min="15">15m</button><button data-min="60">1h</button><button data-min="180">3h</button><button data-min="360">6h</button>
+      </div>
+    </div>
+
+    <p id="trouble" class="trouble" hidden></p>
+    <p id="notice" class="notice" hidden></p>
+
+    <section id="overview">
+      <div id="summary" class="tiles"></div>
+      <div id="sources" class="chips"></div>
+      <nav id="machines" class="seg machines" aria-label="the machine or shelf shown"></nav>
+      <div id="systems"></div>
+      <details id="every" class="panel">
+        <summary>Every temperature, as a table</summary>
+        <input id="filter" type="search" placeholder="show only names with… disk/, Tctl, ipmi/annex">
+        <div class="scroll">
+          <table>
+            <thead><tr><th>Sensor</th><th class="num">°C</th><th id="spark-head"></th><th>From</th><th>Followed by</th><th>Disk</th></tr></thead>
+            <tbody id="readings"></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+
+    <section id="corrections" hidden>
+      <p class="note">Each time a zone was found at another speed than the program set it to, and set again: changed by its BMC or someone else, or its BMC reset. Kept since the program started, the latest 100 for each zone.</p>
+      <div id="fix-tiles" class="tiles"></div>
+      <div class="panel table">
+        <table>
+          <thead><tr><th>When</th><th>Zone</th><th>Why</th><th class="num">Found</th><th class="num">Was set</th><th class="num">Set to</th><th>BMC mode</th><th>What happened</th></tr></thead>
+          <tbody id="fixes"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="settings" hidden>
+      <p class="note">The whole settings file. Saving checks it first: one with anything wrong in it is neither saved nor taken up.</p>
+      <p id="path" class="note"></p>
+      <textarea id="yaml" spellcheck="false" rows="30"></textarea>
+      <div class="row">
+        <button id="save" class="plain on">Save and take up</button>
+        <button id="reload" class="plain">Read it again</button>
+        <span id="saved" class="note"></span>
+      </div>
+      <ul id="errors" class="errors"></ul>
+    </section>
+  </main>
+
+  <div id="tip" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

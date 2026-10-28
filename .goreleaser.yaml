@@ -1,0 +1,69 @@
+version: 2
+
+project_name: ipmi-fan-controller
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+      - -mod=vendor
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    # Linux is what it runs on: its temperatures are the Linux kernel's, and its own BMC Linux's IPMI driver. macOS gets a build for
+    # status and dry runs against BMCs on the network, without the machine's own temperatures
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - '386'
+      - amd64
+      - arm
+      - arm64
+      - riscv64
+    goarm:
+      - '6'
+      - '7'
+    ignore:
+      - goos: darwin
+        goarch: '386'
+      - goos: darwin
+        goarch: arm
+      - goos: darwin
+        goarch: riscv64
+    ldflags:
+      - -s -w
+      - -X github.com/katbyte/go-kt/version.Version={{ .Tag }}
+      - -X github.com/katbyte/go-kt/version.GitCommit={{ .ShortCommit }}
+
+archives:
+  - formats: [tar.gz]
+
+# multi-arch image pushed to ghcr.io on release (needs docker login + buildx in the workflow).
+# tags: v1.2.3, v1.2 and latest (latest skipped for prereleases such as v1.2.3-rc1)
+dockers_v2:
+  - images:
+      - ghcr.io/katbyte/ipmi-fan-controller
+    dockerfile: Dockerfile.goreleaser
+    tags:
+      - '{{ .Tag }}'
+      - 'v{{ .Major }}.{{ .Minor }}'
+      - '{{ if not .Prerelease }}latest{{ end }}'
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    annotations:
+      org.opencontainers.image.title: '{{ .ProjectName }}'
+      org.opencontainers.image.description: 'Sets fan speeds through a server or disk shelf BMC from its disk and CPU temperatures'
+      org.opencontainers.image.source: 'https://github.com/katbyte/ipmi-fan-controller'
+      org.opencontainers.image.version: '{{ .Version }}'
+      org.opencontainers.image.revision: '{{ .FullCommit }}'
+      org.opencontainers.image.licenses: 'GPL-3.0-only'
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  filters:
+    exclude:
+      - '^Bump '
+      - 'merge main'

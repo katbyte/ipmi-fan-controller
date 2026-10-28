@@ -1,0 +1,10 @@
+.claude/
+.DS_Store
+.idea/
+dist/
+ipmi-fan-controller
+.tools/bin/
+.tools/venv/
+.tools/npm/
+__pycache__/
+.coverage/

@@ -1,0 +1,56 @@
+package sensor
+
+import (
+	"github.com/bougou/go-ipmi/pkg/types"
+	// 35.17 Set Sensor Reading And Event Status Command
+)
+
+type SetSensorReadingAndEventStatusRequest struct {
+	SensorNumber uint8
+
+	EventDataBytesOperation  uint8
+	AssertionBitsOperation   uint8
+	DeassertionBitsOperation uint8
+	SensorReadingOperation   uint8
+
+	SensorReading uint8
+	types.SensorEventFlag
+
+	EventData1 uint8
+	EventData2 uint8
+	EventData3 uint8
+}
+
+type SetSensorReadingAndEventStatusResponse struct {
+	// empty
+}
+
+func (req *SetSensorReadingAndEventStatusRequest) Command() types.Command {
+	return types.CommandSetSensorReadingAndEventStatus
+}
+
+func (req *SetSensorReadingAndEventStatusRequest) Pack() []byte {
+	out := make([]byte, 9)
+	types.PackUint8(req.SensorNumber, out, 0)
+
+	var operation uint8
+	operation |= uint8(req.EventDataBytesOperation) << 6
+	operation |= (uint8(req.AssertionBitsOperation) & 0x3f) << 4
+	operation |= (uint8(req.DeassertionBitsOperation) & 0x0f) << 2
+	operation |= uint8(req.SensorReadingOperation) & 0x03
+	types.PackUint8(operation, out, 1)
+
+	types.PackUint8(req.SensorReading, out, 2)
+
+	// Todo determine sensor is threshold based or discrete
+
+	return out
+}
+
+func (res *SetSensorReadingAndEventStatusResponse) Unpack(msg []byte) error {
+	return nil
+}
+
+func (res *SetSensorReadingAndEventStatusResponse) Format() string {
+	return ""
+}

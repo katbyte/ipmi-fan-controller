@@ -1,0 +1,49 @@
+# Default always-on deployment: runs the released image from ghcr.io where the disks are, and sets the
+# fans of the BMCs its settings file names. To run a local build instead: make docker, then set
+# image: ipmi-fan-controller (or add build: .).
+#
+# The settings file is ./config/ipmi-fan-controller.yaml, which the web page writes back to; the
+# directory has to be writable by the image's user (65532), or run the container as root.
+# /sys is the machine's own in a container, so the CPU and disk temperatures need nothing mounted.
+#
+# For the machine's own BMC, through /dev/ipmi0, and for smartctl on disks the kernel gives no
+# temperature for, the container needs the devices and root: uncomment the lines below. A BMC on
+# the network, a disk shelf's or the host's own from inside a VM, needs neither.
+#
+# Stopping the container hands the fans back before the program ends; stop_grace_period gives it
+# the time to.
+
+networks:
+  net:
+    name: net
+
+services:
+  ipmi-fan-controller:
+    image: ghcr.io/katbyte/ipmi-fan-controller:latest
+    container_name: ipmi-fan-controller
+    hostname: ipmi-fan-controller
+    restart: always
+    stop_grace_period: 1m
+    volumes:
+      - ./config:/config
+      # - /secrets/annex-password:/run/secrets/annex:ro  # a password_file the settings name
+    # user: "0"                     # for /dev/ipmi0 and smartctl
+    # devices:
+    #   - /dev/ipmi0:/dev/ipmi0     # the machine's own BMC
+    networks:
+      net:
+    # the web page, when it is on: only the host itself can reach it here. It can change the fans,
+    # so set a token before letting the rest of the network in. With it off nothing listens
+    # ports:
+    #   - "127.0.0.1:9126:9126"
+    environment:
+      - "TZ=America/Vancouver"
+      - "IPMI_FAN_CONTROLLER_LOG=INFO"
+      # - "IPMI_FAN_CONTROLLER_WEB=true"              # serve the web page at /
+      # - "IPMI_FAN_CONTROLLER_WEB_TOKEN=change-me"   # what the web page needs before it changes anything
+      # - "IPMI_FAN_CONTROLLER_DRY_RUN=true"          # read everything and set nothing
+      # - "ANNEX_PASSWORD=..."                        # for a password: ${ANNEX_PASSWORD} in the settings
+    logging:
+      options:
+        max-size: 100m
+        max-file: "1"

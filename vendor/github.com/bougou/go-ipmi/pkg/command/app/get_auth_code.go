@@ -1,0 +1,32 @@
+package app
+
+import "github.com/bougou/go-ipmi/pkg/types"
+
+// GetAuthCodeRequest sends a block of data to the BMC, whereupon the BMC will
+// return a hash of the data together concatenated with the internally stored
+// password for the given channel and user.
+// See 22.21.
+type GetAuthCodeRequest struct {
+	AuthType types.AuthType
+
+	ChannelNumber uint8
+
+	UserID uint8
+
+	// data to hash (must be 16 bytes)
+	Data [16]byte
+}
+
+type GetAuthCodeResponse struct {
+	types.CompletionCode
+
+	// For IPMI v1.5 AuthCode Number:
+	AuthCode [16]byte
+
+	// For IPMI v2.0 Integrity Algorithm Number
+	// Resultant hash, per selected Integrity algorithm. Up to 20 bytes. An
+	// implementation can elect to return a variable length field based on the size of
+	// the hash for the given integrity algorithm, or can return a fixed field where the
+	// hash data is followed by 00h bytes as needed to pad the data to 20 bytes.
+	Hash []byte
+}

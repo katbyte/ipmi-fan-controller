@@ -1,0 +1,72 @@
+package storage
+
+import (
+	"fmt"
+
+	"github.com/bougou/go-ipmi/pkg/types"
+)
+
+// 34.2 Read FRU Data Command
+type ReadFRUDataRequest struct {
+	FRUDeviceID uint8
+	ReadOffset  uint16
+	ReadCount   uint8
+}
+
+type ReadFRUDataResponse struct {
+	CountReturned uint8
+	Data          []byte
+}
+
+func (req *ReadFRUDataRequest) Command() types.Command {
+	return types.CommandReadFRUData
+}
+
+func (req *ReadFRUDataRequest) Pack() []byte {
+	out := make([]byte, 4)
+	types.PackUint8(req.FRUDeviceID, out, 0)
+	types.PackUint16L(req.ReadOffset, out, 1)
+	types.PackUint8(req.ReadCount, out, 3)
+	return out
+}
+
+func (req *ReadFRUDataRequest) Unpack(msg []byte) error {
+	if len(msg) < 4 {
+		return types.ErrUnpackedDataTooShortWith(len(msg), 4)
+	}
+	req.FRUDeviceID, _, _ = types.UnpackUint8(msg, 0)
+	req.ReadOffset, _, _ = types.UnpackUint16L(msg, 1)
+	req.ReadCount, _, _ = types.UnpackUint8(msg, 3)
+	return nil
+}
+
+func (res *ReadFRUDataResponse) Pack() []byte {
+	out := make([]byte, 1+len(res.Data))
+	types.PackUint8(res.CountReturned, out, 0)
+	if len(res.Data) > 0 {
+		types.PackBytes(res.Data, out, 1)
+	}
+	return out
+}
+
+func (res *ReadFRUDataResponse) Unpack(msg []byte) error {
+	if len(msg) < 1 {
+		return types.ErrUnpackedDataTooShortWith(len(msg), 1)
+	}
+
+	res.CountReturned, _, _ = types.UnpackUint8(msg, 0)
+	res.Data, _, _ = types.UnpackBytes(msg, 1, len(msg)-1)
+	return nil
+}
+
+func (res *ReadFRUDataResponse) Format() string {
+	return "" +
+		fmt.Sprintf("Count returned : %d\n", res.CountReturned) +
+		fmt.Sprintf("Data           : %02x\n", res.Data)
+}
+
+func ReadFRUDataLength2Big(cc types.CompletionCode) bool {
+	return cc == types.CodeRequestDataLengthInvalid ||
+		cc == types.CodeRequestDataLengthLimitExceeded ||
+		cc == types.CodeCannotReturnRequestedDataBytes
+}

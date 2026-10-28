@@ -1,0 +1,21 @@
+# Used by goreleaser (dockers_v2 in .goreleaser.yaml) to publish ghcr.io/katbyte/ipmi-fan-controller on
+# tag: the build context holds the prebuilt binary per platform, so this only copies it onto
+# alpine. Dockerfile (from source) is what make docker uses; keep the two final stages in sync.
+# alpine comes from Google's mirror of Docker Hub, which does not turn a shared release runner
+# away for having pulled too much (see release.yaml).
+FROM mirror.gcr.io/library/alpine:3.24
+RUN apk add --no-cache ca-certificates tzdata smartmontools \
+    && adduser -D -H -u 65532 fans \
+    && mkdir /config && chown fans /config
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/ipmi-fan-controller /usr/local/bin/ipmi-fan-controller
+USER fans
+ENV IPMI_FAN_CONTROLLER_CONFIG=/config/ipmi-fan-controller.yaml
+ENV IPMI_FAN_CONTROLLER_LISTEN=:9126
+VOLUME /config
+EXPOSE 9126
+HEALTHCHECK --interval=30s --timeout=3s --start-period=1m \
+  CMD ["ipmi-fan-controller", "healthy"]
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["ipmi-fan-controller"]
+CMD ["serve"]

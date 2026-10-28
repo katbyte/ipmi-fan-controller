@@ -1,0 +1,194 @@
+// Package hal defines the Hardware Abstraction Layer interfaces for an IPMI BMC.
+//
+// Every sub-interface is optional: a HAL implementation may return nil for
+// subsystems that do not exist on the target hardware.  Handlers must nil-check
+// sub-interfaces and return an appropriate IPMI completion code when the
+// hardware capability is absent.
+//
+// # Portability
+//
+// The interfaces in this package are deliberately free of OS-specific types.
+// The only concrete Go packages used in the interface signatures are from the
+// standard library and only primitives (context, error, []byte, basic types).
+// This makes it possible to implement HAL for:
+//   - Linux via sysfs / hwmon / i2c-dev / libgpiod (not yet implemented in-tree)
+//   - Bare-metal Go / TinyGo with direct MMIO or SPI/I2C drivers
+//   - Simulation / test via pkg/hal/mock
+//   - Bridges to existing daemon APIs (e.g. OpenBMC D-Bus)
+package hal
+
+import (
+	"context"
+	"io"
+
+	"github.com/bougou/go-ipmi/pkg/types"
+)
+
+// HAL is the top-level hardware abstraction.  Implementations may return nil
+// for sub-interfaces that are not available on the target.
+type HAL interface {
+	// Chassis returns chassis power and identification controls, or nil.
+	Chassis() ChassisHAL
+	// Sensors returns the sensor reading interface, or nil.
+	Sensors() SensorHAL
+	// Storage returns FRU/SDR blob stores for Storage NetFn handlers, or nil.
+	Storage() StorageHAL
+	// Network returns BMC NIC configuration, or nil.
+	Network() NetworkHAL
+	// GPIO returns discrete GPIO control (LEDs, buttons), or nil.
+	GPIO() GPIOHAL
+	// I2C returns raw I2C bus access for sensors or EEPROMs, or nil.
+	I2C() I2CHAL
+	// Console returns the system serial console used by SOL payloads
+	// (spec v2.0 §15), or nil when the target has no redirectable console.
+	Console() ConsoleHAL
+	// Close releases all hardware resources.
+	Close() error
+}
+
+// ChassisHAL controls physical chassis power, reset, and identity.
+type ChassisHAL interface {
+	// PowerState returns true when the managed system is powered on.
+	PowerState(ctx context.Context) (bool, error)
+	// SetPower powers the managed system on or off.
+	SetPower(ctx context.Context, on bool) error
+	// PowerCycle performs a full power cycle of the managed system
+	// (Chassis Control action 0x02, spec Table 28-3). The semantic meaning
+	// for a given BMC is defined by the upper-layer HAL implementation.
+	PowerCycle(ctx context.Context) error
+	// ColdReset performs a hardware cold reset of the managed system.
+	ColdReset(ctx context.Context) error
+	// WarmReset requests an OS-level warm reboot of the managed system.
+	WarmReset(ctx context.Context) error
+	// Identify pulses the chassis identification LED for the given duration.
+	// seconds == 0 means turn off; [ForcedIdentify] is expressed by the caller
+	// passing a large value (e.g., math.MaxUint8).
+	Identify(ctx context.Context, seconds uint8) error
+	// IntrusionState returns true when the chassis has been opened since last reset.
+	// Implementations that lack intrusion detection must return ErrNotSupported.
+	IntrusionState(ctx context.Context) (bool, error)
+	// SetBootFlags commits the full boot flags structure (spec Table 28-6).
+	// The upper layer decides which bits it cares about; HAL implementations
+	// must not silently drop fields they ignore. Implementations that do not
+	// maintain boot state return ErrNotSupported.
+	SetBootFlags(ctx context.Context, flags *types.BootOptionParam_BootFlags) error
+	// GetBootFlags reads back the current boot flags, symmetric with
+	// [SetBootFlags]. Implementations that cannot read boot flags back must
+	// return ErrNotSupported; handlers translate that to the
+	// CodeParameterNotSupported completion code.
+	GetBootFlags(ctx context.Context) (*types.BootOptionParam_BootFlags, error)
+	// SetBootInfoAcknowledge persists the boot initiator acknowledge data
+	// (spec Table 28-14, param #4).  The HAL may implement this as a no-op
+	// (return nil) if it does not track boot initiator identity.
+	SetBootInfoAcknowledge(ctx context.Context, ack *types.BootOptionParam_BootInfoAcknowledge) error
+	// GetBootInfoAcknowledge reads back the stored acknowledge data.
+	// Implementations that do not persist this return ErrNotSupported.
+	GetBootInfoAcknowledge(ctx context.Context) (*types.BootOptionParam_BootInfoAcknowledge, error)
+}
+
+// SensorDescriptor describes a sensor exposed by the hardware.
+type SensorDescriptor struct {
+	ID   uint8
+	Type uint8 // IPMI sensor type code (section 42 of IPMI spec)
+	Name string
+}
+
+// SensorHAL reads hardware sensor values.
+type SensorHAL interface {
+	// ReadRaw returns the raw sensor byte that the BMC formula maps to a real value.
+	ReadRaw(ctx context.Context, sensorID uint8) (uint8, error)
+	// List returns all sensors available on the hardware.
+	List(ctx context.Context) ([]SensorDescriptor, error)
+}
+
+// IPConfig holds the BMC network interface configuration.
+type IPConfig struct {
+	IP      [4]byte
+	Mask    [4]byte
+	Gateway [4]byte
+	MAC     [6]byte
+	DHCP    bool
+	// Port is the primary RMCP port the BMC listens on (Get LAN Configuration
+	// Parameters param #8). Zero means the standard 623; a non-zero value lets a
+	// BMC that listens on a non-standard port advertise it to in-band software.
+	Port uint16
+}
+
+// NetworkHAL configures the BMC's own network interface.
+// This is separate from [transport.PacketConn]: transport is how packets arrive;
+// NetworkHAL is how the LAN configuration commands read/write NIC parameters.
+type NetworkHAL interface {
+	GetConfig(ctx context.Context) (*IPConfig, error)
+	SetConfig(ctx context.Context, cfg *IPConfig) error
+}
+
+// GPIOHAL provides access to discrete GPIO lines (status LEDs, front-panel buttons).
+type GPIOHAL interface {
+	// Set drives an output GPIO high (true) or low (false).
+	Set(ctx context.Context, pin string, high bool) error
+	// Get reads the current level of an input GPIO.
+	Get(ctx context.Context, pin string) (bool, error)
+	// Watch calls callback whenever the input level changes.
+	// The returned cancel function stops watching.
+	Watch(ctx context.Context, pin string, callback func(high bool)) (cancel func(), err error)
+}
+
+// I2CHAL provides raw I2C bus access for sensors or EEPROM-backed FRU devices.
+type I2CHAL interface {
+	// Read performs a register read from an I2C device.
+	Read(ctx context.Context, bus int, addr uint8, reg uint8, length int) ([]byte, error)
+	// Write performs a register write to an I2C device.
+	Write(ctx context.Context, bus int, addr uint8, reg uint8, data []byte) error
+}
+
+// ConsoleHAL exposes the managed system's serial console for SOL
+// (Serial over LAN) payload redirection (spec v2.0 §15).
+type ConsoleHAL interface {
+	// Open attaches to the system serial console and returns its byte stream.
+	// It is called when a remote console activates the SOL payload
+	// (Activate Payload command, spec v2.0 §24.1) and the returned conn is
+	// closed when the payload is deactivated or the owning session ends.
+	//
+	// Opening an already-attached console must fail: a shared serial port
+	// cannot serve two activations (spec v2.0 §15.3 serial port sharing).
+	Open(ctx context.Context) (ConsoleConn, error)
+}
+
+// ConsoleConn is a bidirectional byte stream to the system serial console.
+//
+// ReadAvailable rather than io.Reader: the SOL data plane drains console
+// output synchronously while answering remote-console packets (spec v2.0
+// §15.9 character accumulation happens at the BMC), so reads must never
+// block. Implementations typically wrap a [net.Conn] or *os.File with an
+// immediate read deadline.
+type ConsoleConn interface {
+	io.WriteCloser
+
+	// ReadAvailable copies immediately-pending console output into p and
+	// returns (0, nil) when no data is waiting. It must not block.
+	ReadAvailable(p []byte) (int, error)
+
+	// SendBreak transmits a ~300 ms serial BREAK to the baseboard (spec
+	// v2.0 Table 15-2 operation bit [4]). Implementations whose transport
+	// has no BREAK concept (e.g. a websocket) return ErrNotSupported.
+	SendBreak(ctx context.Context) error
+}
+
+// ErrNotSupported is returned by HAL methods when the hardware does not
+// support the requested operation.  Handlers translate this to an appropriate
+// IPMI completion code: CodeParameterNotSupported 0x80 (v2.0§28.12/§28.13) for
+// parameter-level operations, CodeUnspecifiedError 0xFF (v2.0§5.2 Table 5-2)
+// via codeFromErr for general error paths.
+var ErrNotSupported = errNotSupported{}
+
+type errNotSupported struct{}
+
+func (errNotSupported) Error() string { return "operation not supported by hardware" }
+
+// ErrNotFound is returned by storage HAL methods when a FRU device ID or SDR
+// record ID is absent. Storage handlers map this to CBh (v2.0§5.2 Table 5-2).
+var ErrNotFound = errNotFound{}
+
+type errNotFound struct{}
+
+func (errNotFound) Error() string { return "requested record or device not found" }

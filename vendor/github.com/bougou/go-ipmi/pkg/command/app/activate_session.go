@@ -1,0 +1,107 @@
+package app
+
+import (
+	"fmt"
+
+	"github.com/bougou/go-ipmi/pkg/types"
+)
+
+// v1.5§18.15 / v2.0§22.17 Activate Session Command
+type ActivateSessionRequest struct {
+	// Authentication Type for session.
+	// The selected type will be used for session activation and for all subsequent authenticated packets under the session, unless "Per-message Authentication" or "User Level Authentication" are disabled.
+	// (See v1.5§6.11.4 / v2.0§6.12.4, Per-Message and User Level Authentication Disables, for more information.)
+	//
+	// This value must match with the Authentication Type used in the Get Session Challenge request for the session. In addition, for multi-session channels this value must also match the authentication type used in the Session Header.
+	AuthTypeForSession types.AuthType
+
+	// Maximum privilege level requested. Indicates the highest privilege level that
+	// may be requested for this session. This privilege level must be less than
+	// or equal to the privilege limit for the channel and the privilege limit for the
+	// user in order for the Activate Session command to be successful
+	// (completion code = 00h). Once the Activate Session command has been
+	// successful, the requested privilege level becomes a 'session limit' that
+	// cannot be raised beyond the requested level, even if the user and/or
+	// channel privilege level limits would allow it. I.e. it takes precedence over
+	// the channel and user privilege level limits.
+	//
+	// [7:4] - reserved
+	// [3:0] - Requested Maximum Privilege Level
+	// 0h = reserved
+	// 1h = Callback level
+	// 2h = User level
+	// 3h = Operator level
+	// 4h = Administrator level
+	// 5h = OEM Proprietary level
+	// all other = reserved
+	MaxPrivilegeLevel types.PrivilegeLevel
+
+	// For multi-session channels: (e.g. LAN channel):
+	// Challenge String data from corresponding Get Session Challenge response.
+	//
+	// For single-session channels that lack session header (e.g. serial/modem in Basic Mode):
+	// Clear text password or AuthCode. See v1.5§18.15.1 / v2.0§22.17.1, AuthCode Algorithms.
+	Challenge [16]byte // uint16
+
+	// Initial Outbound Sequence Number = Starting sequence number that remote console wants used for messages from the BMC. (LS byte first). Must be non-null in order to establish a session. 0000_0000h = reserved. Can be any random value.
+	//
+	// The BMC must increment the outbound session sequence number by one (1) for
+	// each subsequent outbound message from the BMC (include ActivateSessionResponse)
+	//
+	// The BMC sets the incremented number to Sequence field of SessionHeader.
+	InitialOutboundSequenceNumber uint32
+}
+
+func (req *ActivateSessionRequest) Pack() []byte {
+	out := make([]byte, 22)
+	types.PackUint8(uint8(req.AuthTypeForSession), out, 0)
+	types.PackUint8(uint8(req.MaxPrivilegeLevel), out, 1)
+	types.PackBytes(req.Challenge[:], out, 2)
+	types.PackUint32L(req.InitialOutboundSequenceNumber, out, 18)
+	return out
+}
+
+func (req *ActivateSessionRequest) Command() types.Command {
+	return types.CommandActivateSession
+}
+
+type ActivateSessionResponse struct {
+	// Authentication Type for remainder of session
+	AuthType types.AuthType
+
+	// use this for remainder of session.
+	// While atypical, the BMC is allowed to change the Session ID from the one that passed in the request.
+	SessionID uint32
+
+	// Initial inbound seq# = Sequence number that BMC wants remote console to use for subsequent messages in the session. The BMC returns a non-null value for multi-session connections and returns null (all 0s) for single-session connections.
+	//
+	// The remote console must increment the inbound session sequence number by one (1) for each subsequent message it sends to the BMC.
+	InitialInboundSequenceNumber uint32
+
+	// Maximum privilege level allowed for this session
+	//  [7:4] - reserved
+	//  [3:0] - Maximum Privilege Level allowed
+	//  0h = reserved
+	//  1h = Callback level
+	//  2h = User level
+	//  3h = Operator level
+	//  4h = Administrator level
+	//  5h = OEM Proprietary level
+	//  all other = reserved
+	MaxPrivilegeLevel uint8
+}
+
+func (res *ActivateSessionResponse) Unpack(data []byte) error {
+	if len(data) < 10 {
+		return types.ErrUnpackedDataTooShortWith(len(data), 10)
+	}
+	res.AuthType = types.AuthType(data[0])
+	res.SessionID, _, _ = types.UnpackUint32L(data, 1)
+	res.InitialInboundSequenceNumber, _, _ = types.UnpackUint32L(data, 5)
+	res.MaxPrivilegeLevel = data[9]
+	return nil
+}
+
+func (res *ActivateSessionResponse) Format() string {
+	return fmt.Sprintf("%v", res)
+}

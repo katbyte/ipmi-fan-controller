@@ -1,0 +1,30 @@
+# Configuration for typos (https://github.com/crate-ci/typos), run by `make typos` and
+# .github/workflows/typos.yaml. It checks every file type and splits identifiers, so misspelled
+# function and variable names are caught as well as prose.
+#
+# locale is "en" (accept both UK and US spellings): our own text is Canadian English, which takes
+# -ize like the US but -our/-re like the UK, and the kernel's own names are American.
+
+[files]
+ignore-hidden = false # the default skips dotfiles, which would leave .github/ workflows unchecked
+extend-exclude = [
+  ".git/",
+  ".idea/",
+  ".tools/bin/", # gitignored tool installs (make tools)
+  ".tools/npm/",
+  ".tools/venv/",
+  "**/vendor/",
+  "**/go.mod", # commit hashes in pinned versions
+  "**/go.sum",
+  "**/testdata/", # the saved metrics page, checked as the Go that writes it, and what a real machine's kernel said
+]
+
+[default]
+locale = "en"
+
+[default.extend-words]
+# linter names
+decorder = "decorder"
+importas = "importas"
+# a setting mistyped on purpose, in the tests and the comment that says why mistyped settings are refused
+flor = "flor"
